@@ -33,16 +33,26 @@ def upgrade():
     )
     op.create_index("ix_deployments_release_id", "deployment_attempts", ["release_id"])
     op.create_index("ix_deployments_status", "deployment_attempts", ["status"])
-    with op.batch_alter_table("tasks", recreate="always") as batch:
-        batch.add_column(sa.Column("release_id", sa.Integer(), nullable=True))
-        batch.create_foreign_key(
-            "fk_tasks_release_id_releases", "releases", ["release_id"], ["id"]
+    if op.get_context().dialect.name == "postgresql":
+        op.add_column("tasks", sa.Column("release_id", sa.Integer(), nullable=True))
+        op.create_foreign_key(
+            "fk_tasks_release_id_releases", "tasks", "releases", ["release_id"], ["id"]
         )
+    else:
+        with op.batch_alter_table("tasks", recreate="always") as batch:
+            batch.add_column(sa.Column("release_id", sa.Integer(), nullable=True))
+            batch.create_foreign_key(
+                "fk_tasks_release_id_releases", "releases", ["release_id"], ["id"]
+            )
 
 
 def downgrade():
-    with op.batch_alter_table("tasks", recreate="always") as batch:
-        batch.drop_column("release_id")
+    if op.get_context().dialect.name == "postgresql":
+        op.drop_constraint("fk_tasks_release_id_releases", "tasks", type_="foreignkey")
+        op.drop_column("tasks", "release_id")
+    else:
+        with op.batch_alter_table("tasks", recreate="always") as batch:
+            batch.drop_column("release_id")
     op.drop_index("ix_deployments_status", table_name="deployment_attempts")
     op.drop_index("ix_deployments_release_id", table_name="deployment_attempts")
     op.drop_table("deployment_attempts")
