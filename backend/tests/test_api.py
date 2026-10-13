@@ -477,3 +477,84 @@ def test_delete_release_with_tasks_409(client):
     assert client.delete(f"/api/releases/{release['id']}").status_code == 409
     client.delete(f"/api/releases/{release['id']}/tasks/{t1['id']}")
     assert client.delete(f"/api/releases/{release['id']}").status_code == 204
+
+
+def test_deploy_report_requires_token_config(client, monkeypatch):
+    from app.main import app
+    import app.config as config
+
+    monkeypatch.setattr(config.settings, "deploy_report_token", "")
+    project = create_project(client).json()
+    release = create_release(client, project["id"]).json()
+    response = client.post(
+        "/api/deployments/report",
+        json={"release_id": release["id"], "environment": "staging", "status": "SUCCEEDED"},
+    )
+    assert response.status_code == 503
+
+
+def test_deploy_report_rejects_bad_token(client, monkeypatch):
+    from app.main import app
+    import app.config as config
+
+    monkeypatch.setattr(config.settings, "deploy_report_token", "secret-token")
+    project = create_project(client).json()
+    release = create_release(client, project["id"]).json()
+    response = client.post(
+        "/api/deployments/report",
+        headers={"Authorization": "Bearer wrong"},
+        json={"release_id": release["id"], "environment": "staging", "status": "SUCCEEDED"},
+    )
+    assert response.status_code == 403
+    no_auth = client.post(
+        "/api/deployments/report",
+        json={"release_id": release["id"], "environment": "staging", "status": "SUCCEEDED"},
+    )
+    assert no_auth.status_code == 401
+
+
+def test_deploy_report_success_records_and_deploys(client, monkeypatch):
+    from app.main import app
+    import app.config as config
+
+    monkeypatch.setattr(config.settings, "deploy_report_token", "secret-token")
+    project = create_project(client).json()
+    t1 = create_task(client, project_id=project["id"]).json()
+    release = create_release(client, project["id"]).json()
+    client.post(f"/api/releases/{release['id']}/tasks/{t1['id']}")
+    client.put(f"/api/tasks/{t1['id']}", json={"status": "DONE"})
+    client.put(f"/api/releases/{release['id']}", json={"status": "READY"})
+    response = client.post(
+        "/api/deployments/report",
+        headers={"Authorization": "Bearer secret-token"},
+        json={
+            "release_id": release["id"],
+            "environment": "prod",
+            "commit_sha": "abcdef123456",
+            "image_ref": "ghcr.io/maverick-sst/berth-backend:abcdef123456",
+            "status": "SUCCEEDED",
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["source"] == "ci"
+    assert body["status"] == "SUCCEEDED"
+    assert body["finished_at"] is not None
+    assert client.get(f"/api/releases/{release['id']}").json()["status"] == "DEPLOYED"
+    events = client.get("/api/activity").json()
+    assert any(e["action"] == "deployment_reported" and e["actor"] == "ci" for e in events)
+
+
+def test_deploy_report_failure_requires_reason(client, monkeypatch):
+    from app.main import app
+    import app.config as config
+
+    monkeypatch.setattr(config.settings, "deploy_report_token", "secret-token")
+    project = create_project(client).json()
+    release = create_release(client, project["id"]).json()
+    response = client.post(
+        "/api/deployments/report",
+        headers={"Authorization": "Bearer secret-token"},
+        json={"release_id": release["id"], "environment": "dev", "status": "FAILED"},
+    )
+    assert response.status_code == 422

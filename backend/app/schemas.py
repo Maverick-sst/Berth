@@ -131,8 +131,17 @@ class DeploymentCreate(BaseModel):
     environment: Environment = "dev"
     commit_sha: str | None = Field(default=None, max_length=40)
     image_ref: str | None = Field(default=None, max_length=300)
-    source: Literal["manual", "ci"] = "manual"
+    source: Literal["manual", "ci", "deploy-hook"] = "manual"
     status: DeploymentStatus = "IN_PROGRESS"
+
+
+class DeploymentReport(BaseModel):
+    release_id: int = Field(ge=1)
+    environment: Environment
+    commit_sha: str | None = Field(default=None, max_length=40)
+    image_ref: str | None = Field(default=None, max_length=300)
+    status: Literal["SUCCEEDED", "FAILED"] = "SUCCEEDED"
+    failure_reason: str | None = Field(default=None, max_length=2000)
 
 
 class DeploymentOut(BaseModel):

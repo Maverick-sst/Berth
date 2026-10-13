@@ -6,6 +6,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from .config import settings
 from .db import get_db
+from .security import require_deploy_token
 from .models import (
     ActivityEvent,
     Comment,
@@ -21,6 +22,7 @@ from .schemas import (
     DeploymentCreate,
     DeploymentFinish,
     DeploymentOut,
+    DeploymentReport,
     ProjectCreate,
     ProjectOut,
     ProjectUpdate,
@@ -38,7 +40,10 @@ from .services import record_activity
 
 app = FastAPI(title=settings.app_name, version="1.1.0")
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
@@ -433,6 +438,59 @@ def finish_deployment(
         record_activity(
             db, "deployment", attempt.id, "updated",
             f"Deployment failed: {release.name} -> {attempt.environment}: {payload.failure_reason}",
+        )
+    db.commit()
+    db.refresh(attempt)
+    return attempt
+
+
+@app.post(
+    "/api/deployments/report",
+    response_model=DeploymentOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def ci_report_deployment(
+    payload: DeploymentReport,
+    actor: str = Depends(require_deploy_token),
+    db: Session = Depends(get_db),
+):
+    release = db.get(Release, payload.release_id)
+    if not release:
+        raise HTTPException(status_code=404, detail="Release not found")
+    if payload.status == "FAILED" and not payload.failure_reason:
+        raise HTTPException(
+            status_code=422, detail="failure_reason is required when marking FAILED"
+        )
+    attempt = DeploymentAttempt(
+        release_id=release.id,
+        environment=payload.environment,
+        commit_sha=payload.commit_sha,
+        image_ref=payload.image_ref,
+        status=payload.status,
+        source="ci",
+        failure_reason=payload.failure_reason,
+        finished_at=func.now(),
+    )
+    db.add(attempt)
+    db.flush()
+    record_activity(
+        db, "deployment", attempt.id, "deployment_reported",
+        f"CI reported deployment: {release.name} -> {payload.environment} ({payload.status})",
+        actor=actor,
+    )
+    if payload.status == "SUCCEEDED" and release.status in ("READY", "DEPLOYING"):
+        release.status = "DEPLOYED"
+        record_activity(
+            db, "release", release.id, "status_changed",
+            f"Release status changed: {release.name} ({release.status} -> DEPLOYED)",
+            actor=actor,
+        )
+    elif payload.status == "FAILED" and release.status in ("READY", "DEPLOYING"):
+        release.status = "FAILED"
+        record_activity(
+            db, "release", release.id, "status_changed",
+            f"Release status changed: {release.name} ({release.status} -> FAILED)",
+            actor=actor,
         )
     db.commit()
     db.refresh(attempt)
