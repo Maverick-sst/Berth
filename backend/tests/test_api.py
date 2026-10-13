@@ -290,3 +290,190 @@ def test_activity_limit_and_ordering(client):
     assert len(events) == 5
     ids = [e["id"] for e in events]
     assert ids == sorted(ids, reverse=True)
+
+
+def create_release(client, project_id, name="v1.0", **overrides):
+    payload = {"project_id": project_id, "name": name, **overrides}
+    return client.post("/api/releases", json=payload)
+
+
+def test_release_create_defaults_and_readiness_empty(client):
+    project = create_project(client).json()
+    response = create_release(client, project["id"])
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "PLANNED"
+    detail = client.get(f"/api/releases/{body['id']}").json()
+    assert detail["readiness"]["ready"] is False
+    assert "no tasks" in detail["readiness"]["blockers"][0]
+
+
+def test_release_unknown_project_404(client):
+    response = create_release(client, 999)
+    assert response.status_code == 404
+
+
+def test_release_not_found(client):
+    assert client.get("/api/releases/999").status_code == 404
+    assert client.put("/api/releases/999", json={"name": "x"}).status_code == 404
+    assert client.delete("/api/releases/999").status_code == 404
+
+
+def test_release_readiness_calculated_from_tasks(client):
+    project = create_project(client).json()
+    release = create_release(client, project["id"]).json()
+    t1 = create_task(client, title="Done work", project_id=project["id"]).json()
+    create_task(client, title="Pending work", project_id=project["id"])
+    client.post(f"/api/releases/{release['id']}/tasks/{t1['id']}")
+    ptask = client.get("/api/tasks", params={"project_id": project["id"]}).json()
+    for t in ptask:
+        if t["title"] == "Pending work":
+            client.post(f"/api/releases/{release['id']}/tasks/{t['id']}")
+    client.put(f"/api/tasks/{t1['id']}", json={"status": "DONE"})
+    detail = client.get(f"/api/releases/{release['id']}").json()
+    readiness = detail["readiness"]
+    assert readiness["total_tasks"] == 2
+    assert readiness["done_tasks"] == 1
+    assert readiness["ready"] is False
+    assert readiness["blockers"] == ["1 of 2 tasks not DONE"]
+    unfinished_ids = {t["id"] for t in readiness["unfinished_tasks"]}
+    assert t1["id"] not in unfinished_ids
+
+
+def test_release_all_tasks_done_ready(client):
+    project = create_project(client).json()
+    release = create_release(client, project["id"]).json()
+    t1 = create_task(client, project_id=project["id"]).json()
+    client.post(f"/api/releases/{release['id']}/tasks/{t1['id']}")
+    client.put(f"/api/tasks/{t1['id']}", json={"status": "DONE"})
+    detail = client.get(f"/api/releases/{release['id']}").json()
+    assert detail["readiness"]["ready"] is True
+    assert detail["readiness"]["blockers"] == []
+
+
+def test_release_legal_transition_chain(client):
+    project = create_project(client).json()
+    release = create_release(client, project["id"]).json()
+    rid = release["id"]
+    t1 = create_task(client, project_id=project["id"]).json()
+    client.post(f"/api/releases/{rid}/tasks/{t1['id']}")
+    client.put(f"/api/tasks/{t1['id']}", json={"status": "DONE"})
+    assert client.put(f"/api/releases/{rid}", json={"status": "READY"}).status_code == 200
+    assert client.put(f"/api/releases/{rid}", json={"status": "DEPLOYING"}).status_code == 200
+    dep = client.post(
+        f"/api/releases/{rid}/deployments", json={"environment": "staging", "commit_sha": "abc123"}
+    ).json()
+    finish = client.post(f"/api/deployments/{dep['id']}/finish", json={"status": "SUCCEEDED"})
+    assert finish.status_code == 200
+    assert client.get(f"/api/releases/{rid}").json()["status"] == "DEPLOYED"
+
+
+def test_release_illegal_transitions_409(client):
+    project = create_project(client).json()
+    release = create_release(client, project["id"]).json()
+    rid = release["id"]
+    assert client.put(f"/api/releases/{rid}", json={"status": "DEPLOYING"}).status_code == 409
+    assert client.put(f"/api/releases/{rid}", json={"status": "DEPLOYED"}).status_code == 409
+    assert client.put(f"/api/releases/{rid}", json={"status": "FAILED"}).status_code == 409
+    assert client.put(f"/api/releases/{rid}", json={"status": "BOGUS"}).status_code == 422
+
+
+def test_release_transition_out_of_terminal_state(client):
+    project = create_project(client).json()
+    release = create_release(client, project["id"]).json()
+    rid = release["id"]
+    t1 = create_task(client, project_id=project["id"]).json()
+    client.post(f"/api/releases/{rid}/tasks/{t1['id']}")
+    client.put(f"/api/tasks/{t1['id']}", json={"status": "DONE"})
+    client.put(f"/api/releases/{rid}", json={"status": "READY"})
+    client.put(f"/api/releases/{rid}", json={"status": "DEPLOYING"})
+    dep = client.post(f"/api/releases/{rid}/deployments", json={"environment": "prod"}).json()
+    client.post(
+        f"/api/deployments/{dep['id']}/finish",
+        json={"status": "FAILED", "failure_reason": "ImagePullBackOff"},
+    )
+    assert client.get(f"/api/releases/{rid}").json()["status"] == "FAILED"
+    back = client.put(f"/api/releases/{rid}", json={"status": "PLANNED"})
+    assert back.status_code == 200
+
+
+def test_deployment_start_must_be_in_progress(client):
+    project = create_project(client).json()
+    release = create_release(client, project["id"]).json()
+    response = client.post(
+        f"/api/releases/{release['id']}/deployments", json={"status": "SUCCEEDED"}
+    )
+    assert response.status_code == 422
+
+
+def test_deployment_finish_requires_reason_on_failure(client):
+    project = create_project(client).json()
+    release = create_release(client, project["id"]).json()
+    dep = client.post(
+        f"/api/releases/{release['id']}/deployments", json={"environment": "dev"}
+    ).json()
+    response = client.post(f"/api/deployments/{dep['id']}/finish", json={"status": "FAILED"})
+    assert response.status_code == 422
+
+
+def test_deployment_finish_idempotency_guard(client):
+    project = create_project(client).json()
+    release = create_release(client, project["id"]).json()
+    dep = client.post(
+        f"/api/releases/{release['id']}/deployments", json={"environment": "dev"}
+    ).json()
+    client.post(f"/api/deployments/{dep['id']}/finish", json={"status": "SUCCEEDED"})
+    again = client.post(f"/api/deployments/{dep['id']}/finish", json={"status": "SUCCEEDED"})
+    assert again.status_code == 409
+
+
+def test_deployment_history_ordering_and_fields(client):
+    project = create_project(client).json()
+    release = create_release(client, project["id"], name="hist").json()
+    d1 = client.post(
+        f"/api/releases/{release['id']}/deployments",
+        json={"environment": "dev", "commit_sha": "aaaa", "image_ref": "ghcr.io/x/y:sha"},
+    ).json()
+    client.post(f"/api/deployments/{d1['id']}/finish", json={"status": "SUCCEEDED"})
+    d2 = client.post(
+        f"/api/releases/{release['id']}/deployments",
+        json={"environment": "staging", "commit_sha": "bbbb"},
+    ).json()
+    client.post(
+        f"/api/deployments/{d2['id']}/finish",
+        json={"status": "FAILED", "failure_reason": "CrashLoopBackOff"},
+    )
+    history = client.get(f"/api/releases/{release['id']}/deployments").json()
+    assert [d["id"] for d in history] == [d2["id"], d1["id"]]
+    assert history[1]["status"] == "SUCCEEDED"
+    assert history[0]["status"] == "FAILED"
+    assert history[0]["failure_reason"] == "CrashLoopBackOff"
+    assert history[0]["finished_at"] is not None
+    all_deployments = client.get("/api/deployments").json()
+    assert len(all_deployments) == 2
+
+
+def test_attach_task_cross_project_and_duplicate_409(client):
+    project = create_project(client, name="A").json()
+    other = create_project(client, name="B").json()
+    release = create_release(client, project["id"]).json()
+    foreign = create_task(client, project_id=other["id"]).json()
+    loose = create_task(client).json()
+    dup_target = create_task(client, project_id=project["id"]).json()
+    client.post(f"/api/releases/{release['id']}/tasks/{dup_target['id']}")
+    assert client.post(f"/api/releases/{release['id']}/tasks/{foreign['id']}").status_code == 409
+    assert client.post(f"/api/releases/{release['id']}/tasks/{loose['id']}").status_code == 200
+    other_release = create_release(client, project["id"], name="v2").json()
+    assert client.post(f"/api/releases/{other_release['id']}/tasks/{dup_target['id']}").status_code == 409
+    detach = client.delete(f"/api/releases/{release['id']}/tasks/{dup_target['id']}")
+    assert detach.status_code == 200
+
+
+def test_delete_release_with_tasks_409(client):
+    project = create_project(client).json()
+    release = create_release(client, project["id"]).json()
+    t1 = create_task(client, project_id=project["id"]).json()
+    client.post(f"/api/releases/{release['id']}/tasks/{t1['id']}")
+    assert client.delete(f"/api/releases/{release['id']}").status_code == 409
+    client.delete(f"/api/releases/{release['id']}/tasks/{t1['id']}")
+    assert client.delete(f"/api/releases/{release['id']}").status_code == 204
