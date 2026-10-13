@@ -28,3 +28,6 @@ terraform/*.tfvars
 *.key
 kubeconfig
 
+
+# CI job logs (local debugging only)
+berth-job-log.txt
