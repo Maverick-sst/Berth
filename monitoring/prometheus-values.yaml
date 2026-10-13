@@ -1,5 +1,6 @@
 grafana:
   enabled: true
+  adminPassword: changeme   # override at install time, do not reuse in shared envs
 prometheus:
   prometheusSpec:
     serviceMonitorSelectorNilUsesHelmValues: false
