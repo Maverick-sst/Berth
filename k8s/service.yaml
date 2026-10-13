@@ -1,11 +1,11 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: taskboard-backend
-  namespace: taskboard
+  name: berth-backend
+  namespace: berth
 spec:
   selector:
-    app: taskboard-backend
+    app: berth-backend
   ports:
     - protocol: TCP
       port: 80
@@ -15,11 +15,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: taskboard-frontend
-  namespace: taskboard
+  name: berth-frontend
+  namespace: berth
 spec:
   selector:
-    app: taskboard-frontend
+    app: berth-frontend
   ports:
     - protocol: TCP
       port: 80

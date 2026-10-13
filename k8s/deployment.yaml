@@ -1,28 +1,28 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: taskboard-backend
-  namespace: taskboard
+  name: berth-backend
+  namespace: berth
   labels:
-    app: taskboard-backend
+    app: berth-backend
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: taskboard-backend
+      app: berth-backend
   template:
     metadata:
       labels:
-        app: taskboard-backend
+        app: berth-backend
     spec:
       containers:
         - name: backend
-          image: nensiravaliya28/taskboard-backend:__IMAGE_TAG__
+          image: nensiravaliya28/berth-backend:__IMAGE_TAG__
           ports:
             - containerPort: 8000
           env:
             - name: DATABASE_URL
-              value: "sqlite:///./taskboard.db"
+              value: "sqlite:///./berth.db"
           readinessProbe:
             httpGet:
               path: /health
@@ -40,22 +40,22 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: taskboard-frontend
-  namespace: taskboard
+  name: berth-frontend
+  namespace: berth
   labels:
-    app: taskboard-frontend
+    app: berth-frontend
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: taskboard-frontend
+      app: berth-frontend
   template:
     metadata:
       labels:
-        app: taskboard-frontend
+        app: berth-frontend
     spec:
       containers:
         - name: frontend
-          image: nensiravaliya28/taskboard-frontend:__IMAGE_TAG__
+          image: nensiravaliya28/berth-frontend:__IMAGE_TAG__
           ports:
             - containerPort: 80
