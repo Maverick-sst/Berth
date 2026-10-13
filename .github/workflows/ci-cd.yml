@@ -74,7 +74,7 @@ jobs:
           tags: ${{ steps.images.outputs.prefix }}/berth-frontend:${{ github.sha }}
 
       - name: Scan backend image (HIGH/CRITICAL gate)
-        uses: aquasecurity/trivy-action@v0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.images.outputs.prefix }}/berth-backend:${{ github.sha }}
           severity: HIGH,CRITICAL
@@ -83,7 +83,7 @@ jobs:
           format: table
 
       - name: Scan frontend image (HIGH/CRITICAL gate)
-        uses: aquasecurity/trivy-action@v0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.images.outputs.prefix }}/berth-frontend:${{ github.sha }}
           severity: HIGH,CRITICAL
