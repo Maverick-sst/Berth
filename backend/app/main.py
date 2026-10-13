@@ -6,19 +6,34 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from .config import settings
 from .db import get_db
-from .models import ActivityEvent, Comment, Project, Task
+from .models import (
+    ActivityEvent,
+    Comment,
+    DeploymentAttempt,
+    Project,
+    Release,
+    Task,
+)
 from .schemas import (
     ActivityEventOut,
     CommentCreate,
     CommentOut,
+    DeploymentCreate,
+    DeploymentFinish,
+    DeploymentOut,
     ProjectCreate,
     ProjectOut,
     ProjectUpdate,
+    ReleaseCreate,
+    ReleaseDetailOut,
+    ReleaseOut,
+    ReleaseUpdate,
     StatsOut,
     TaskCreate,
     TaskOut,
     TaskUpdate,
 )
+from .releases import can_transition, release_readiness
 from .services import record_activity
 
 app = FastAPI(title=settings.app_name, version="1.1.0")
@@ -197,6 +212,243 @@ def list_activity(
     return list(
         db.scalars(
             select(ActivityEvent).order_by(ActivityEvent.id.desc()).limit(limit)
+        )
+    )
+
+
+@app.get("/api/releases", response_model=list[ReleaseOut])
+def list_releases(
+    project_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    query = select(Release).order_by(Release.id.desc())
+    if project_id is not None:
+        query = query.where(Release.project_id == project_id)
+    return list(db.scalars(query))
+
+
+@app.post("/api/releases", response_model=ReleaseOut, status_code=status.HTTP_201_CREATED)
+def create_release(payload: ReleaseCreate, db: Session = Depends(get_db)):
+    _validate_project_ref(payload.project_id, db)
+    release = Release(**payload.model_dump())
+    db.add(release)
+    db.flush()
+    record_activity(db, "release", release.id, "created", f"Release created: {release.name}")
+    db.commit()
+    db.refresh(release)
+    return release
+
+
+@app.get("/api/releases/{release_id}", response_model=ReleaseDetailOut)
+def get_release(release_id: int, db: Session = Depends(get_db)):
+    release = db.get(Release, release_id)
+    if not release:
+        raise HTTPException(status_code=404, detail="Release not found")
+    tasks = list(db.scalars(select(Task).where(Task.release_id == release.id)))
+    detail = ReleaseDetailOut(
+        id=release.id,
+        project_id=release.project_id,
+        name=release.name,
+        description=release.description,
+        status=release.status,
+        created_at=release.created_at,
+        readiness=release_readiness(db, release),
+        tasks=tasks,
+    )
+    return detail
+
+
+@app.put("/api/releases/{release_id}", response_model=ReleaseOut)
+def update_release(release_id: int, payload: ReleaseUpdate, db: Session = Depends(get_db)):
+    release = db.get(Release, release_id)
+    if not release:
+        raise HTTPException(status_code=404, detail="Release not found")
+    updates = payload.model_dump(exclude_unset=True)
+    new_status = updates.pop("status", None)
+    if new_status and new_status != release.status:
+        try:
+            can_transition(release, new_status)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        record_activity(
+            db, "release", release.id, "status_changed",
+            f"Release status changed: {release.name} ({release.status} -> {new_status})",
+        )
+        release.status = new_status
+    for key, value in updates.items():
+        setattr(release, key, value)
+    record_activity(db, "release", release.id, "updated", f"Release updated: {release.name}")
+    db.commit()
+    db.refresh(release)
+    return release
+
+
+@app.post("/api/releases/{release_id}/tasks/{task_id}", response_model=ReleaseDetailOut)
+def attach_task(release_id: int, task_id: int, db: Session = Depends(get_db)):
+    release = db.get(Release, release_id)
+    if not release:
+        raise HTTPException(status_code=404, detail="Release not found")
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.release_id and task.release_id != release_id:
+        raise HTTPException(
+            status_code=409, detail="Task is already attached to another release"
+        )
+    if task.project_id and task.project_id != release.project_id:
+        raise HTTPException(
+            status_code=409, detail="Task does not belong to this release's project"
+        )
+    task.release_id = release_id
+    record_activity(db, "release", release_id, "updated", f"Task attached to release: {release.name} <- {task.title}")
+    db.commit()
+    db.refresh(release)
+    return get_release(release_id, db)
+
+
+@app.delete("/api/releases/{release_id}/tasks/{task_id}", response_model=ReleaseDetailOut)
+def detach_task(release_id: int, task_id: int, db: Session = Depends(get_db)):
+    release = db.get(Release, release_id)
+    if not release:
+        raise HTTPException(status_code=404, detail="Release not found")
+    task = db.get(Task, task_id)
+    if not task or task.release_id != release_id:
+        raise HTTPException(status_code=404, detail="Task not attached to this release")
+    task.release_id = None
+    record_activity(db, "release", release_id, "updated", f"Task detached from release: {release.name} - {task.title}")
+    db.commit()
+    db.refresh(release)
+    return get_release(release_id, db)
+
+
+@app.delete("/api/releases/{release_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_release(release_id: int, db: Session = Depends(get_db)):
+    release = db.get(Release, release_id)
+    if not release:
+        raise HTTPException(status_code=404, detail="Release not found")
+    attached = db.scalar(select(func.count(Task.id)).where(Task.release_id == release_id))
+    if attached:
+        raise HTTPException(
+            status_code=409, detail="Release has tasks attached. Detach them before deleting."
+        )
+    record_activity(db, "release", release_id, "deleted", f"Release deleted: {release.name}")
+    db.delete(release)
+    db.commit()
+
+
+@app.get("/api/releases/{release_id}/deployments", response_model=list[DeploymentOut])
+def list_deployments(release_id: int, db: Session = Depends(get_db)):
+    if not db.get(Release, release_id):
+        raise HTTPException(status_code=404, detail="Release not found")
+    return list(
+        db.scalars(
+            select(DeploymentAttempt)
+            .where(DeploymentAttempt.release_id == release_id)
+            .order_by(DeploymentAttempt.id.desc())
+        )
+    )
+
+
+@app.post(
+    "/api/releases/{release_id}/deployments",
+    response_model=DeploymentOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_deployment(
+    release_id: int, payload: DeploymentCreate, db: Session = Depends(get_db)
+):
+    release = db.get(Release, release_id)
+    if not release:
+        raise HTTPException(status_code=404, detail="Release not found")
+    if payload.status != "IN_PROGRESS":
+        raise HTTPException(
+            status_code=422, detail="New deployment attempts must start as IN_PROGRESS"
+        )
+    attempt = DeploymentAttempt(**payload.model_dump())
+    attempt.release_id = release_id
+    db.add(attempt)
+    db.flush()
+    record_activity(
+        db, "deployment", attempt.id, "deployment_reported",
+        f"Deployment attempt started: {release.name} -> {payload.environment}",
+    )
+    if release.status not in ("READY", "FAILED", "DEPLOYED") and payload.environment != "dev":
+        pass
+    if release.status == "READY":
+        try:
+            can_transition(release, "DEPLOYING")
+        except ValueError:
+            pass
+        else:
+            release.status = "DEPLOYING"
+            record_activity(
+                db, "release", release.id, "status_changed",
+                f"Release status changed: {release.name} (READY -> DEPLOYING)",
+            )
+    db.commit()
+    db.refresh(attempt)
+    return attempt
+
+
+@app.post(
+    "/api/deployments/{deployment_id}/finish",
+    response_model=DeploymentOut,
+)
+def finish_deployment(
+    deployment_id: int, payload: DeploymentFinish, db: Session = Depends(get_db)
+):
+    attempt = db.get(DeploymentAttempt, deployment_id)
+    if not attempt:
+        raise HTTPException(status_code=404, detail="Deployment attempt not found")
+    if attempt.status != "IN_PROGRESS":
+        raise HTTPException(
+            status_code=409, detail="Deployment attempt already finished"
+        )
+    if payload.status == "FAILED" and not payload.failure_reason:
+        raise HTTPException(
+            status_code=422, detail="failure_reason is required when marking FAILED"
+        )
+    attempt.status = payload.status
+    attempt.failure_reason = payload.failure_reason
+    attempt.finished_at = func.now()
+    release = db.get(Release, attempt.release_id)
+    if payload.status == "SUCCEEDED":
+        if release.status == "DEPLOYING":
+            release.status = "DEPLOYED"
+            record_activity(
+                db, "release", release.id, "status_changed",
+                f"Release status changed: {release.name} (DEPLOYING -> DEPLOYED)",
+            )
+        record_activity(
+            db, "deployment", attempt.id, "updated",
+            f"Deployment succeeded: {release.name} -> {attempt.environment}",
+        )
+    else:
+        if release.status == "DEPLOYING":
+            release.status = "FAILED"
+            record_activity(
+                db, "release", release.id, "status_changed",
+                f"Release status changed: {release.name} (DEPLOYING -> FAILED)",
+            )
+        record_activity(
+            db, "deployment", attempt.id, "updated",
+            f"Deployment failed: {release.name} -> {attempt.environment}: {payload.failure_reason}",
+        )
+    db.commit()
+    db.refresh(attempt)
+    return attempt
+
+
+@app.get("/api/deployments", response_model=list[DeploymentOut])
+def list_all_deployments(
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    return list(
+        db.scalars(
+            select(DeploymentAttempt)
+            .order_by(DeploymentAttempt.id.desc())
+            .limit(limit)
         )
     )
 
