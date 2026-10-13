@@ -6,8 +6,11 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from .config import settings
 from .db import get_db
-from .models import Project, Task
+from .models import ActivityEvent, Comment, Project, Task
 from .schemas import (
+    ActivityEventOut,
+    CommentCreate,
+    CommentOut,
     ProjectCreate,
     ProjectOut,
     ProjectUpdate,
@@ -16,6 +19,7 @@ from .schemas import (
     TaskOut,
     TaskUpdate,
 )
+from .services import record_activity
 
 app = FastAPI(title=settings.app_name, version="1.1.0")
 app.add_middleware(
@@ -56,6 +60,8 @@ def list_projects(db: Session = Depends(get_db)):
 def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
     project = Project(**payload.model_dump())
     db.add(project)
+    db.flush()
+    record_activity(db, "project", project.id, "created", f"Project created: {project.name}")
     db.commit()
     db.refresh(project)
     return project
@@ -73,6 +79,7 @@ def update_project(
     project = _get_project_or_404(project_id, db)
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(project, key, value)
+    record_activity(db, "project", project.id, "updated", f"Project updated: {project.name}")
     db.commit()
     db.refresh(project)
     return project
@@ -89,6 +96,7 @@ def delete_project(project_id: int, db: Session = Depends(get_db)):
             status_code=409,
             detail="Project has tasks. Move or delete them before deleting the project.",
         )
+    record_activity(db, "project", project.id, "deleted", f"Project deleted: {project.name}")
     db.delete(project)
     db.commit()
 
@@ -148,6 +156,51 @@ def list_tasks(
     return list(db.scalars(query))
 
 
+@app.post(
+    "/api/tasks/{task_id}/comments",
+    response_model=CommentOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_comment(task_id: int, payload: CommentCreate, db: Session = Depends(get_db)):
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    comment = Comment(task_id=task_id, **payload.model_dump())
+    db.add(comment)
+    db.flush()
+    record_activity(
+        db, "task", task_id, "commented",
+        f"Comment added on task: {task.title}",
+        actor=payload.author,
+    )
+    db.commit()
+    db.refresh(comment)
+    return comment
+
+
+@app.get("/api/tasks/{task_id}/comments", response_model=list[CommentOut])
+def list_comments(task_id: int, db: Session = Depends(get_db)):
+    if not db.get(Task, task_id):
+        raise HTTPException(status_code=404, detail="Task not found")
+    return list(
+        db.scalars(
+            select(Comment).where(Comment.task_id == task_id).order_by(Comment.id.asc())
+        )
+    )
+
+
+@app.get("/api/activity", response_model=list[ActivityEventOut])
+def list_activity(
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    return list(
+        db.scalars(
+            select(ActivityEvent).order_by(ActivityEvent.id.desc()).limit(limit)
+        )
+    )
+
+
 @app.get("/api/tasks/stats", response_model=StatsOut)
 def stats(db: Session = Depends(get_db)):
     rows = db.execute(
@@ -180,6 +233,8 @@ def create_task(payload: TaskCreate, db: Session = Depends(get_db)):
     _validate_project_ref(payload.project_id, db)
     task = Task(**payload.model_dump())
     db.add(task)
+    db.flush()
+    record_activity(db, "task", task.id, "created", f"Task created: {task.title}")
     db.commit()
     db.refresh(task)
     return task
@@ -194,8 +249,20 @@ def update_task(
         raise HTTPException(status_code=404, detail="Task not found")
     updates = payload.model_dump(exclude_unset=True)
     _validate_project_ref(updates.get("project_id"), db)
+    original_status = task.status
     for key, value in updates.items():
         setattr(task, key, value)
+    if updates.get("status") and updates["status"] != original_status:
+        record_activity(
+            db, "task", task.id, "status_changed",
+            f"Task status changed: {task.title} ({original_status} -> {task.status})",
+        )
+    if "assignee" in updates:
+        record_activity(
+            db, "task", task.id, "assigned", f"Task assigned to {task.assignee}: {task.title}"
+        )
+    if updates and "status" not in updates and "assignee" not in updates:
+        record_activity(db, "task", task.id, "updated", f"Task updated: {task.title}")
     db.commit()
     db.refresh(task)
     return task
