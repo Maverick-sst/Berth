@@ -1,28 +1,42 @@
+fullnameOverride: ""
+
 frontend:
-  image: ghcr.io/YOUR_ORG/taskboard-frontend
+  image: ghcr.io/YOUR_GHCR_USERNAME/berth-frontend
   tag: latest
 backend:
-  image: ghcr.io/YOUR_ORG/taskboard-backend
+  image: ghcr.io/YOUR_GHCR_USERNAME/berth-backend
   tag: latest
+
 replicaCount: 2
-namespace: taskboard
+namespace: berth
 imagePullSecrets: []
+
 postgres:
-  host: taskboard-postgres
-  database: taskboard
-  username: taskboard
-  password: taskboard
+  host: berth-postgres
+  database: berth
+  username: berth
+  password: changeme-in-prod
+
 ingress:
   enabled: false
-  host: taskboard.local
+  host: berth.local
+
 hpa:
   enabled: true
   minReplicas: 2
   maxReplicas: 6
   targetCPUUtilizationPercentage: 60
+
 resources:
   requests: {cpu: 100m, memory: 256Mi}
   limits: {cpu: 500m, memory: 512Mi}
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  allowPrivilegeEscalation: false
+  capabilities: {drop: [ALL]}
+
 monitoring:
   serviceMonitor:
     enabled: true

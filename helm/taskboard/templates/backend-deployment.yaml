@@ -1,15 +1,20 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "taskboard.fullname" . }}-backend
+  name: {{ include "berth.fullname" . }}-backend
+  labels: {app: berth-backend}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
-    matchLabels: {app: taskboard-backend}
+    matchLabels: {app: berth-backend}
   template:
     metadata:
-      labels: {app: taskboard-backend}
+      labels: {app: berth-backend}
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml . | indent 8 }}
+      {{- end }}
       containers:
         - name: backend
           image: "{{ .Values.backend.image }}:{{ .Values.backend.tag }}"
@@ -27,3 +32,5 @@ spec:
             periodSeconds: 15
           resources:
 {{ toYaml .Values.resources | indent 12 }}
+          securityContext:
+{{ toYaml .Values.securityContext | indent 12 }}

@@ -1,6 +1,8 @@
 apiVersion: v1
 kind: Service
-metadata: {name: taskboard-frontend}
+metadata:
+  name: {{ include "berth.fullname" . }}-frontend
+  labels: {app: berth-frontend}
 spec:
-  selector: {app: taskboard-frontend}
-  ports: [{port: 80, targetPort: 80}]
+  selector: {app: berth-frontend}
+  ports: [{port: 8080, targetPort: 8080, name: http}]

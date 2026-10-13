@@ -1,6 +1,6 @@
 replicaCount: 1
 ingress:
   enabled: true
-  host: taskboard.local
+  host: berth.local
 hpa:
   enabled: false

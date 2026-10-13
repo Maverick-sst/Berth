@@ -1,10 +1,10 @@
 frontend:
-  image: ghcr.io/YOUR_ORG/taskboard-frontend
+  image: ghcr.io/YOUR_GHCR_USERNAME/berth-frontend
 backend:
-  image: ghcr.io/YOUR_ORG/taskboard-backend
+  image: ghcr.io/YOUR_GHCR_USERNAME/berth-backend
 replicaCount: 2
 ingress:
   enabled: true
-  host: taskboard.example.com
+  host: berth.example.com
 hpa:
   enabled: true
