@@ -1,8 +1,13 @@
-# Session 21 — DevOps Final Capstone: TaskBoard (Python)
+# Berth — DevSecOps Final Capstone (formerly TaskBoard)
+
+> **Berth** is where engineering work docks: projects, tasks, releases,
+> and deployment history — shipped through a full DevSecOps pipeline.
+> This repository began as the TaskBoard capstone baseline and is being
+> evolved into Berth. Local behavior is unchanged in this phase.
 
 ## 1. What we are building
 
-TaskBoard is a small but realistic SaaS-style project management application:
+The starting stack is a realistic SaaS-style project management application (evolving into Berth):
 
 - React + Vite frontend
 - Responsive HTML/JSX + CSS UI
