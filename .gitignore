@@ -16,3 +16,15 @@ __pycache__/
 *.db
 .DS_Store
 .venv/
+.pytest_cache/
+
+# Terraform runtime state (never commit)
+terraform/.terraform/
+terraform/*.tfvars
+!terraform/terraform.tfvars.example
+
+# Local secrets
+*.pem
+*.key
+kubeconfig
+
