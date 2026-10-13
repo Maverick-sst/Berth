@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars (gitignored) and adjust before applying.
+# NEVER commit real values.
+
+aws_region   = "ap-south-1"
+cluster_name = "berth-eks"
+environment  = "dev"
