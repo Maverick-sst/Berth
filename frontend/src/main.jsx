@@ -14,8 +14,8 @@ function App(){
     try{
       setError('');
       const url=activeProject?`${API}/tasks?project_id=${activeProject}`:`${API}/tasks`;
-      const [a,b,c]=await Promise.all([apiFetch(url),apiFetch(`${API}/tasks/stats`),apiFetch(`${API}/activity?limit=12`)]);
-      setTasks(await a.json());setStats(await b.json());setActivity(await c.json());
+      const [a,b,c,d]=await Promise.all([apiFetch(url),apiFetch(`${API}/tasks/stats`),apiFetch(`${API}/activity?limit=12`),apiFetch(`${API}/releases`)]);
+      setTasks(await a.json());setStats(await b.json());setActivity(await c.json());setReleases(await d.json());
     }catch(e){setError(e.message)}finally{setLoading(false)}
   },[activeProject]);
   const loadProjects=useCallback(async()=>{
@@ -57,6 +57,24 @@ function App(){
       e.currentTarget.reset();setShowForm(false);await load();
     }catch(e2){setError(e2.message)}finally{setBusy(false)}
   };
+  const openRelease=async(r)=>{
+    try{setReleaseDetail(await (await apiFetch(`${API}/releases/${r.id}`)).json())}catch(e){setError(e.message)}
+  };
+  const advanceRelease=async(r)=>{
+    const next=r.status==='PLANNED'?'READY':r.status==='READY'?'DEPLOYING':null;
+    if(!next)return;
+    setBusy(true);
+    try{await apiFetch(`${API}/releases/${r.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:next})});await load()}
+    catch(e){setError(e.message)}finally{setBusy(false)}
+  };
+  const createRelease=async(e)=>{
+    e.preventDefault();setBusy(true);
+    const f=new FormData(e.currentTarget);
+    try{
+      await apiFetch(`${API}/releases`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:f.get('name'),description:f.get('description'),project_id:activeProject||(projects[0]&&projects[0].id)})});
+      setShowForm(false);await load();
+    }catch(e2){setError(e2.message)}finally{setBusy(false)}
+  };
   const createProject=async(e)=>{
     e.preventDefault();setBusy(true);
     const f=new FormData(e.currentTarget);
@@ -69,6 +87,11 @@ function App(){
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark">B</span><div><b>Berth</b><small>Engineering work, docked</small></div></div>
       <nav><a className="active" href="#" onClick={(e)=>{e.preventDefault();setActiveProject(null)}}>▦ <span>All tasks</span></a></nav>
+      <div className="projects-head"><b>Releases</b><button className="side-add" onClick={()=>setShowForm('release')} title="New release">＋</button></div>
+      <nav className="projects-nav">
+        {releases.slice(0,6).map(r=><a key={r.id} href="#" onClick={(e)=>{e.preventDefault();openRelease(r)}}>⌘ <span>{r.name}</span><em className={'rel-'+r.status.toLowerCase()}>{r.status}</em></a>)}
+        {!releases.length&&<small className="side-empty">No releases yet</small>}
+      </nav>
       <div className="projects-head"><b>Projects</b><button className="side-add" onClick={()=>setShowForm('project')}>＋</button></div>
       <nav className="projects-nav">
         {projects.map(p=><a key={p.id} href="#" className={activeProject===p.id?'active':''} onClick={(e)=>{e.preventDefault();setActiveProject(p.id)}}>◫ <span>{p.name}</span></a>)}
@@ -84,7 +107,7 @@ function App(){
         <div><p className="eyebrow">{activeProject?'PROJECT':'WORKSPACE'}{activeProject?' / '+(projects.find(p=>p.id===activeProject)?.name||''):' / OVERVIEW'}</p>
         <h1>{activeProject?projects.find(p=>p.id===activeProject)?.name||'Project':'All tasks'}</h1>
         <p className="muted">{activeProject?'Tasks scoped to this project.':'Everything across your workspace.'}</p></div>
-        <button className="primary" onClick={()=>setShowForm('task')} disabled={busy}>＋ New task</button>
+        <div className="header-actions"><button className="ghost" onClick={()=>setShowForm('release')} disabled={busy||!projects.length} title={projects.length?'':'Create a project first'}>⌘ New release</button><button className="primary" onClick={()=>setShowForm('task')} disabled={busy}>＋ New task</button></div>
       </header>
       {error&&<div className="alert">⚠ {error}</div>}
       <section className="stats">
@@ -125,6 +148,13 @@ function App(){
         <p className="muted modal-note">{activeProject?`Will be added to project #${activeProject}.`:'Will be added without a project.'}</p>
         <button className="primary full" disabled={busy}>{busy?'Saving…':'Create task'}</button>
       </form></div>}
+      {showForm==='release'&&<div className="modal-backdrop"><form className="modal" onSubmit={createRelease}>
+        <div className="modal-head"><div><p className="eyebrow">CREATE RELEASE</p><h2>Prepare a release</h2></div><button type="button" className="close" onClick={()=>setShowForm(false)}>×</button></div>
+        <label>Release name<input name="name" required placeholder="e.g. v1.2.0"/></label>
+        <label>Description<textarea name="description" placeholder="What ships in this release?"/></label>
+        <p className="muted modal-note">{projects.length?`Release for project: ${projects.find(p=>p.id===(activeProject||(projects[0]&&projects[0].id)))?.name}`:'Create a project first.'}</p>
+        <button className="primary full" disabled={busy||!projects.length}>{busy?'Saving…':'Create release'}</button>
+      </form></div>}
       {showForm==='project'&&<div className="modal-backdrop"><form className="modal" onSubmit={createProject}>
         <div className="modal-head"><div><p className="eyebrow">CREATE PROJECT</p><h2>Dock a new project</h2></div><button type="button" className="close" onClick={()=>setShowForm(false)}>×</button></div>
         <label>Project name<input name="name" required placeholder="e.g. Web Platform"/></label>
@@ -140,6 +170,7 @@ function App(){
           <div><small>Assignee</small><b>{showTaskDetail.assignee}</b></div>
           <div><small>Project</small><b>{projects.find(p=>p.id===showTaskDetail.project_id)?.name||'—'}</b></div>
         </div>
+        {releaseDetail&&<div className="rel-mini"><small>Release snapshot: {releaseDetail.name} ({releaseDetail.status})</small></div>}
         <h3>Discussion</h3>
         <div className="comment-list">{comments.length?comments.map(c=><div className="comment" key={c.id}><b>{c.author}</b><small>{new Date(c.created_at).toLocaleString()}</small><p>{c.content}</p></div>):<p className="muted">No comments yet.</p>}</div>
         <form onSubmit={addComment}><div className="form-row">
@@ -150,6 +181,7 @@ function App(){
     </main>
   </div>;
 }
+function ReleaseBadge({status}){return <span className={`status rel-${status.toLowerCase()}`}>{status}</span>}
 function ActivityFeed({activity}){return activity.length?<div>{activity.map(e=><div className="activity-row" key={e.id}><span className="activity-icon">{e.action==='created'?'＋':e.action==='deleted'?'−':e.action==='commented'?'💬':'✎'}</span><div><b>{e.summary}</b><small>{e.actor} · {new Date(e.created_at).toLocaleString()}</small></div></div>)}</div>:<div className="empty">No activity yet. Actions will appear here.</div>}
 function Stat({label,value,icon}){return <div className="stat"><div className="stat-icon">{icon}</div><div><small>{label}</small><strong>{value}</strong><span>live from API</span></div></div>}
 createRoot(document.getElementById('root')).render(<App/>);
