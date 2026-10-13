@@ -234,3 +234,59 @@ def test_pagination_bounded(client):
     assert {t["id"] for t in page1}.isdisjoint({t["id"] for t in page2})
     assert client.get("/api/tasks", params={"page_size": 1000}).status_code == 422
     assert client.get("/api/tasks", params={"page": 0}).status_code == 422
+
+
+def test_comment_roundtrip_and_ordering(client):
+    task = create_task(client, title="Commented task").json()
+    client.post(f"/api/tasks/{task['id']}/comments", json={"author": "Ana", "content": "First"})
+    client.post(f"/api/tasks/{task['id']}/comments", json={"author": "Bo", "content": "Second"})
+    response = client.get(f"/api/tasks/{task['id']}/comments")
+    assert response.status_code == 200
+    comments = response.json()
+    assert [c["content"] for c in comments] == ["First", "Second"]
+    assert comments[0]["author"] == "Ana"
+
+
+def test_comment_content_required(client):
+    task = create_task(client).json()
+    response = client.post(f"/api/tasks/{task['id']}/comments", json={"content": ""})
+    assert response.status_code == 422
+
+
+def test_comments_on_missing_task_404(client):
+    assert client.post("/api/tasks/999/comments", json={"content": "hi"}).status_code == 404
+    assert client.get("/api/tasks/999/comments").status_code == 404
+
+
+def test_task_activity_events_created(client):
+    task = create_task(client, title="Tracked task").json()
+    client.put(f"/api/tasks/{task['id']}", json={"status": "IN_PROGRESS"})
+    client.put(f"/api/tasks/{task['id']}", json={"assignee": "Ana"})
+    client.post(f"/api/tasks/{task['id']}/comments", json={"author": "Ana", "content": "ok"})
+    events = client.get("/api/activity").json()
+    actions = [(e["entity_type"], e["action"]) for e in events]
+    assert ("task", "commented") in actions
+    assert ("task", "status_changed") in actions
+    assert ("task", "assigned") in actions
+    assert ("task", "created") in actions
+    assert events[0]["entity_id"] == task["id"]
+
+
+def test_project_activity_events_created(client):
+    project = create_project(client, name="Tracked project").json()
+    client.put(f"/api/projects/{project['id']}", json={"description": "now real"})
+    client.delete(f"/api/projects/{project['id']}")
+    events = client.get("/api/activity").json()
+    actions = [(e["entity_type"], e["action"]) for e in events]
+    assert ("project", "created") in actions
+    assert ("project", "updated") in actions
+    assert ("project", "deleted") in actions
+
+
+def test_activity_limit_and_ordering(client):
+    for i in range(7):
+        create_task(client, title=f"T{i}")
+    events = client.get("/api/activity", params={"limit": 5}).json()
+    assert len(events) == 5
+    ids = [e["id"] for e in events]
+    assert ids == sorted(ids, reverse=True)
