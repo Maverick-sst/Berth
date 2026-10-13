@@ -1,14 +1,16 @@
-name: TaskBoard Python CI/CD
+name: Berth CI/CD
 
 on:
   push:
-    branches: main
+    branches: [main]
   pull_request:
-    branches: main
+    branches: [main]
 
-# ========================================
-# STEP 1 — Test
-# ========================================
+env:
+  REGISTRY: ghcr.io
+  BACKEND_IMAGE: ghcr.io/${{ github.repository }}/berth-backend
+  FRONTEND_IMAGE: ghcr.io/${{ github.repository }}/berth-frontend
+
 jobs:
   test:
     name: Test - Backend & Frontend
@@ -24,160 +26,113 @@ jobs:
         working-directory: backend
 
       - name: Run backend tests
-        run: pytest -q
+        run: pytest -v
         working-directory: backend
 
       - uses: actions/setup-node@v4
-        with: {node-version: '22'}
+        with: {node-version: '22', cache: npm, cache-dependency-path: frontend/package-lock.json}
 
       - name: Build frontend
-        run: npm install && npm run build
+        run: npm ci && npm run build
         working-directory: frontend
 
-  # ========================================
-  # STEP 2 — Build Docker Images
-  # ========================================
-  docker-build:
-    name: Docker Build
+  build-scan-push:
+    name: Build, Scan, Publish to GHCR
     needs: test
     runs-on: ubuntu-latest
+    permissions: {contents: read, packages: write}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Build backend image
-        run: |
-          docker build -t nensiravaliya28/taskboard-backend:${{ github.sha }} ./backend
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build frontend image
-        run: |
-          docker build -t nensiravaliya28/taskboard-frontend:${{ github.sha }} ./frontend
-
-  # ========================================
-  # STEP 3 — Scan Docker Images with Trivy
-  # ========================================
-  image-scan:
-    name: Image Scan - Trivy
-    needs: docker-build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Rebuild backend image for scan
-        run: |
-          docker build -t nensiravaliya28/taskboard-backend:${{ github.sha }} ./backend
-
-      - name: Rebuild frontend image for scan
-        run: |
-          docker build -t nensiravaliya28/taskboard-frontend:${{ github.sha }} ./frontend
-
-      - name: Install Trivy
-        run: |
-          sudo apt-get install -y wget
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
-            | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
-          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" \
-            | sudo tee /etc/apt/sources.list.d/trivy.list
-          sudo apt-get update && sudo apt-get install -y trivy
-
-      - name: Scan backend image
-        run: |
-          trivy image --severity HIGH,CRITICAL --ignore-unfixed \
-            nensiravaliya28/taskboard-backend:${{ github.sha }}
-
-      - name: Scan frontend image
-        run: |
-          trivy image --severity HIGH,CRITICAL --ignore-unfixed \
-            nensiravaliya28/taskboard-frontend:${{ github.sha }}
-
-  # ========================================
-  # STEP 4 — Push Images to Docker Hub
-  # ========================================
-  push:
-    name: Push Images to Docker Hub
-    needs: image-scan
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Login to Docker Hub
+      - name: Login to GHCR
         uses: docker/login-action@v3
         with:
-          username: nensiravaliya28
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and tag backend image
-        run: |
-          docker build \
-            -t nensiravaliya28/taskboard-backend:${{ github.sha }} \
-            -t nensiravaliya28/taskboard-backend:latest \
-            ./backend
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          load: true
+          tags: ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
 
-      - name: Build and tag frontend image
-        run: |
-          docker build \
-            -t nensiravaliya28/taskboard-frontend:${{ github.sha }} \
-            -t nensiravaliya28/taskboard-frontend:latest \
-            ./frontend
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          load: true
+          tags: ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
 
-      - name: Push backend image
-        run: |
-          docker push nensiravaliya28/taskboard-backend:${{ github.sha }}
-          docker push nensiravaliya28/taskboard-backend:latest
+      - name: Scan backend image (HIGH/CRITICAL gate)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table
 
-      - name: Push frontend image
-        run: |
-          docker push nensiravaliya28/taskboard-frontend:${{ github.sha }}
-          docker push nensiravaliya28/taskboard-frontend:latest
+      - name: Scan frontend image (HIGH/CRITICAL gate)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table
 
-  # ========================================
-  # STEP 5 — Deploy to Kubernetes
-  #          (only runs on push to main)
-  # ========================================
-  deploy:
-    name: Deploy to Kubernetes
-    needs: push
+      - name: Push backend image (immutable commit SHA tag)
+        run: docker push ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+
+      - name: Push frontend image (immutable commit SHA tag)
+        run: docker push ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+
+  # Manual Helm deployment to the real cluster - run by the user per the
+  # cloud runbook (docs/CLOUD_RUNBOOK.md). CI stops after publishing so
+  # no cloud credentials live in this repository.
+  smoke-kind:
+    name: Smoke test on kind
+    needs: build-scan-push
     runs-on: ubuntu-latest
-
-    # Skip this step on pull requests — only deploy real merges to main
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Create k8s Kind Cluster
+      - name: Create kind cluster
         uses: helm/kind-action@v1.10.0
 
-      - name: Create namespace
-        run: kubectl apply -f k8s/namespace.yaml
-
-      - name: Update deployment with new image tag
+      - name: Load published images into kind
         run: |
-          sed -i "s|__IMAGE_TAG__|${{ github.sha }}|g" k8s/deployment.yaml
+          kind load docker-image ${{ env.BACKEND_IMAGE }}:${{ github.sha }} --name chart-testing || true
+          kind load docker-image ${{ env.FRONTEND_IMAGE }}:${{ github.sha }} --name chart-testing || true
 
-      - name: Deploy to Kubernetes
+      - name: Deploy with Helm (locally built images)
         run: |
-          kubectl apply -f k8s/deployment.yaml
-          kubectl apply -f k8s/service.yaml
+          docker build -t berth-backend:smoke ./backend
+          docker build -t berth-frontend:smoke ./frontend
+          kind load docker-image berth-backend:smoke --name chart-testing
+          kind load docker-image berth-frontend:smoke --name chart-testing
+          kubectl apply -f k8s/namespace.yaml
+          helm upgrade --install berth ./helm/taskboard \
+            --namespace berth --create-namespace \
+            --set backend.image=berth-backend --set backend.tag=smoke \
+            --set frontend.image=berth-frontend --set frontend.tag=smoke \
+            --set replicaCount=1 --set hpa.enabled=false \
+            --set monitoring.serviceMonitor.enabled=false
 
-      - name: Wait for backend pod to be ready
+      - name: Wait for backend readiness
         run: |
-          kubectl wait --for=condition=ready pod \
-            -l app=taskboard-backend \
-            -n taskboard \
-            --timeout=120s
+          kubectl wait --for=condition=available deployment/berth-berth-backend -n berth --timeout=180s
 
-      - name: Test backend API in CI (Curl)
+      - name: Smoke test API
         run: |
-          kubectl port-forward service/taskboard-backend 8001:80 -n taskboard &
-          sleep 3
-
-          echo "🌐 Fetching health endpoint..."
+          kubectl port-forward -n berth service/berth-berth-backend 8001:8000 &
+          sleep 5
           curl -sf http://localhost:8001/health
-
-          echo -e "\n🌐 Fetching root API..."
-          curl -sf http://localhost:8001/
-
+          curl -sf http://localhost:8001/ready
+          curl -sf -X POST http://localhost:8001/api/projects -H 'Content-Type: application/json' -d '{"name":"Smoke Project"}'
