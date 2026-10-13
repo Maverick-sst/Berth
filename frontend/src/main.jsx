@@ -8,14 +8,14 @@ async function apiFetch(path, options){
   return response;
 }
 function App(){
-  const [projects,setProjects]=useState([]),[activeProject,setActiveProject]=useState(null),[tasks,setTasks]=useState([]),[stats,setStats]=useState({total:0,todo:0,inProgress:0,done:0}),[filter,setFilter]=useState('ALL'),[showForm,setShowForm]=useState(false),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  const [projects,setProjects]=useState([]),[activeProject,setActiveProject]=useState(null),[tasks,setTasks]=useState([]),[stats,setStats]=useState({total:0,todo:0,inProgress:0,done:0}),[filter,setFilter]=useState('ALL'),[showForm,setShowForm]=useState(false),[showTaskDetail,setShowTaskDetail]=useState(null),[activity,setActivity]=useState([]),[comments,setComments]=useState([]),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState('');
   const load=useCallback(async()=>{
     setLoading(true);
     try{
       setError('');
       const url=activeProject?`${API}/tasks?project_id=${activeProject}`:`${API}/tasks`;
-      const [a,b]=await Promise.all([apiFetch(url),apiFetch(`${API}/tasks/stats`)]);
-      setTasks(await a.json());setStats(await b.json());
+      const [a,b,c]=await Promise.all([apiFetch(url),apiFetch(`${API}/tasks/stats`),apiFetch(`${API}/activity?limit=12`)]);
+      setTasks(await a.json());setStats(await b.json());setActivity(await c.json());
     }catch(e){setError(e.message)}finally{setLoading(false)}
   },[activeProject]);
   const loadProjects=useCallback(async()=>{
@@ -32,8 +32,20 @@ function App(){
   };
   const remove=async(t)=>{
     setBusy(true);
-    try{await apiFetch(`${API}/tasks/${t.id}`,{method:'DELETE'});await load()}
+    try{await apiFetch(`${API}/tasks/${t.id}`,{method:'DELETE'});await load();if(showTaskDetail?.id===t.id)setShowTaskDetail(null)}
     catch(e){setError(e.message)}finally{setBusy(false)}
+  };
+  const openDetail=async(t)=>{
+    setShowTaskDetail(t);
+    try{setComments(await (await apiFetch(`${API}/tasks/${t.id}/comments`)).json())}catch(e){setError(e.message)}
+  };
+  const addComment=async(e)=>{
+    e.preventDefault();setBusy(true);
+    const f=new FormData(e.currentTarget);
+    try{
+      const comment=await (await apiFetch(`${API}/tasks/${showTaskDetail.id}/comments`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({author:f.get('author')||'Berth Crew',content:f.get('content')})})).json();
+      setComments(cs=>[...cs,comment]);e.currentTarget.reset();await load();
+    }catch(e2){setError(e2.message)}finally{setBusy(false)}
   };
   const create=async(e)=>{
     e.preventDefault();setBusy(true);
@@ -91,7 +103,7 @@ function App(){
               <td>{projects.find(p=>p.id===t.project_id)?.name||'—'}</td><td>{t.assignee}</td>
               <td><span className={`priority ${t.priority.toLowerCase()}`}>{t.priority}</span></td>
               <td><span className={`status ${t.status.toLowerCase()}`}>{label(t.status)}</span></td>
-              <td><div className="row-actions"><button className="icon-btn" onClick={()=>update(t)} disabled={busy} title="Advance status">↻</button><button className="icon-btn danger" onClick={()=>remove(t)} disabled={busy} title="Delete task">🗑</button></div></td></tr>)}</tbody>
+              <td><div className="row-actions"><button className="icon-btn" onClick={()=>openDetail(t)} disabled={busy} title="Open task">↧</button><button className="icon-btn" onClick={()=>update(t)} disabled={busy} title="Advance status">↻</button><button className="icon-btn danger" onClick={()=>remove(t)} disabled={busy} title="Delete task">🗑</button></div></td></tr>)}</tbody>
           </table></div>:<div className="empty">{tasks.length?'No tasks in this filter.':'No tasks yet. Create your first one.'}</div>}
         </div>
         <aside className="panel activity">
@@ -99,7 +111,7 @@ function App(){
           <div className="fact-row"><span>Projects</span><b>{projects.length}</b></div>
           <div className="fact-row"><span>Tasks</span><b>{stats.total}</b></div>
           <div className="fact-row"><span>Completed</span><b>{stats.done}</b></div>
-          <div className="pipeline"><span>Activity</span><i></i><span>arrives</span><i></i><span>in CP3</span></div>
+          <ActivityFeed activity={activity}/>
         </aside>
       </section>
       {showForm==='task'&&<div className="modal-backdrop"><form className="modal" onSubmit={create}>
@@ -119,8 +131,25 @@ function App(){
         <label>Description<textarea name="description" placeholder="What is this project about?"/></label>
         <button className="primary full" disabled={busy}>{busy?'Saving…':'Create project'}</button>
       </form></div>}
+      {showTaskDetail&&<div className="modal-backdrop" onClick={()=>setShowTaskDetail(null)}><div className="modal" onClick={(e)=>e.stopPropagation()}>
+        <div className="modal-head"><div><p className="eyebrow">TASK</p><h2>{showTaskDetail.title}</h2></div><button type="button" className="close" onClick={()=>setShowTaskDetail(null)}>×</button></div>
+        <p className="muted">{showTaskDetail.description||'No description.'}</p>
+        <div className="detail-grid">
+          <div><small>Status</small><b>{label(showTaskDetail.status)}</b></div>
+          <div><small>Priority</small><b>{showTaskDetail.priority}</b></div>
+          <div><small>Assignee</small><b>{showTaskDetail.assignee}</b></div>
+          <div><small>Project</small><b>{projects.find(p=>p.id===showTaskDetail.project_id)?.name||'—'}</b></div>
+        </div>
+        <h3>Discussion</h3>
+        <div className="comment-list">{comments.length?comments.map(c=><div className="comment" key={c.id}><b>{c.author}</b><small>{new Date(c.created_at).toLocaleString()}</small><p>{c.content}</p></div>):<p className="muted">No comments yet.</p>}</div>
+        <form onSubmit={addComment}><div className="form-row">
+          <label>Author<input name="author" placeholder="Berth Crew"/></label>
+          <label>Comment<input name="content" required placeholder="Say something useful"/></label>
+        </div><button className="primary full" disabled={busy}>{busy?'Posting…':'Add comment'}</button></form>
+      </div></div>}
     </main>
   </div>;
 }
+function ActivityFeed({activity}){return activity.length?<div>{activity.map(e=><div className="activity-row" key={e.id}><span className="activity-icon">{e.action==='created'?'＋':e.action==='deleted'?'−':e.action==='commented'?'💬':'✎'}</span><div><b>{e.summary}</b><small>{e.actor} · {new Date(e.created_at).toLocaleString()}</small></div></div>)}</div>:<div className="empty">No activity yet. Actions will appear here.</div>}
 function Stat({label,value,icon}){return <div className="stat"><div className="stat-icon">{icon}</div><div><small>{label}</small><strong>{value}</strong><span>live from API</span></div></div>}
 createRoot(document.getElementById('root')).render(<App/>);
