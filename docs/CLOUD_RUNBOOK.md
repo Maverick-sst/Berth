@@ -43,7 +43,11 @@ until you have reviewed the plan and explicitly decided to pay.**
 
 CI does this on every push to `main` after tests + Trivy gate:
 
-- Images: `ghcr.io/<owner>/berth-backend:<sha>` and `ghcr.io/<owner>/berth-frontend:<sha>`.
+- Images: `ghcr.io/<owner>/<repo>/berth-backend:<sha>` and
+  `ghcr.io/<owner>/<repo>/berth-frontend:<sha>` — for this repository
+  (lowercased, nested under the repo name):
+  `ghcr.io/maverick-sst/berth/berth-backend:<sha>` and
+  `ghcr.io/maverick-sst/berth/berth-frontend:<sha>`.
 - After the first run, open the GHCR package pages and set visibility /
   access for the cluster (private packages need a pull secret):
 
@@ -66,6 +70,12 @@ terraform apply            # review the plan summary one last time; type yes
 aws eks update-kubeconfig --region ap-south-1 --name berth-eks
 kubectl config current-context   # confirm you are on berth-eks, not another cluster
 
+# confirm the EBS CSI driver is active — without it the Postgres PVC stays
+# Pending (EKS 1.31 has no in-tree EBS provisioner). Terraform installs the
+# add-on; verify before deploying:
+kubectl get deployment ebs-csi-controller -n kube-system
+kubectl get storageclass   # expect a gp2/gp3 class named after the CSI driver
+
 # observability stack (kube-prometheus-stack, ~free besides storage):
 helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
   --namespace monitoring --create-namespace \
@@ -74,9 +84,9 @@ helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
 # application:
 helm upgrade --install berth ./helm/taskboard \
   --namespace berth --create-namespace \
-  --set backend.image=ghcr.io/<owner>/berth-backend \
+  --set backend.image=ghcr.io/maverick-sst/berth/berth-backend \
   --set backend.tag=<COMMIT_SHA> \
-  --set frontend.image=ghcr.io/<owner>/berth-frontend \
+  --set frontend.image=ghcr.io/maverick-sst/berth/berth-frontend \
   --set frontend.tag=<COMMIT_SHA> \
   --set postgres.password=<generate-one>
 
@@ -89,8 +99,18 @@ kubectl -n berth port-forward svc/berth-berth-backend 8001:8000 &
 curl -s localhost:8001/health && curl -s localhost:8001/ready
 ```
 
-- **Ingress controller** (optional): install ingress-nginx and enable
-  `--set ingress.enabled=true --set ingress.host=<your-host>`.
+- **Ingress controller (required before enabling ingress):** the chart's
+  Ingress resource does nothing by itself — install ingress-nginx first
+  (creates a billable load balancer), then enable the chart ingress:
+
+  ```bash
+  helm upgrade --install ingress-nginx ingress-nginx \
+    --repo https://kubernetes.github.io/ingress-nginx \
+    --namespace ingress-nginx --create-namespace
+  kubectl -n ingress-nginx get svc ingress-nginx-controller   # wait for EXTERNAL-IP
+  helm upgrade berth ./helm/taskboard -n berth --reuse-values \
+    --set ingress.enabled=true --set ingress.host=<nlb-dns-or-host>
+  ```
 - **Prometheus verification:** `kubectl -n monitoring port-forward
   svc/monitoring-kube-prometheus-prometheus 9090:9090` → check the
   `berth-berth-backend` target is **UP** at `/targets`.

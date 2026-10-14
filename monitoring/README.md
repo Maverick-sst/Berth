@@ -31,9 +31,12 @@ kubectl port-forward -n monitoring svc/monitoring-grafana 3001:80
 
 ## Dashboard note
 
-Panels filter on the label `app="berth-backend"`. The instrumentator
-may or may not attach pod labels depending on the setup; if panels are
-empty, check the actual metric labels in Prometheus (`up`,
-`http_requests_total`) and adjust the label selector in
+The dashboard queries no longer filter on a per-app label — the default
+metrics from `prometheus-fastapi-instrumentator` only carry
+`handler`/`status`/`method` labels, so filtering on a label like
+`app="berth-backend"` would leave every panel empty. If you add custom
+labels to the instrumentator later, you can re-introduce selectors; if
+panels are still empty, check the actual metric labels in Prometheus
+(`up`, `http_requests_total`) and adjust the queries in
 `grafana-dashboard.json` accordingly. Do not trust a green dashboard
 without confirming the Prometheus target is UP.

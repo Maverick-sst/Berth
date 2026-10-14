@@ -1,10 +1,15 @@
 fullnameOverride: ""
 
 frontend:
-  image: ghcr.io/YOUR_GHCR_USERNAME/berth-frontend
+  # CI publishes nested under the repo name: ghcr.io/<owner>/<repo>/berth-<app>
+  # (see .github/workflows/ci-cd.yml "Compute lowercase image names").
+  image: ghcr.io/YOUR_GHCR_USERNAME/berth/berth-frontend
+  # tag: pin a full 40-char commit SHA from a green CI run — never "latest"
+  # for real deploys (the CI kind smoke overrides this value with its own
+  # local tag, so this default is only used when deploying manually).
   tag: latest
 backend:
-  image: ghcr.io/YOUR_GHCR_USERNAME/berth-backend
+  image: ghcr.io/YOUR_GHCR_USERNAME/berth/berth-backend
   tag: latest
 
 replicaCount: 2

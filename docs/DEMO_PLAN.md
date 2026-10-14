@@ -60,7 +60,11 @@ kubectl create namespace argocd
 kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 kubectl -n argocd rollout status deployment/argocd-server
 
-# register the Berth chart as an Application:
+# register the Berth chart as an Application.
+# IMPORTANT: pin the same image SHA + postgres password you used for the
+# initial helm install — without `helm.parameters` ArgoCD would render the
+# chart defaults (placeholder GHCR owner, tag `latest`, demo password) and
+# its selfHeal would fight your working release.
 cat <<'YAML' | kubectl apply -f -
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -73,6 +77,13 @@ spec:
     repoURL: https://github.com/<owner>/<repo>.git
     targetRevision: main
     path: helm/taskboard
+    helm:
+      parameters:
+      - {forceString: true, name: backend.image,  value: ghcr.io/<owner>/<repo>/berth-backend}
+      - {forceString: true, name: backend.tag,    value: <COMMIT_SHA>}
+      - {forceString: true, name: frontend.image, value: ghcr.io/<owner>/<repo>/berth-frontend}
+      - {forceString: true, name: frontend.tag,   value: <COMMIT_SHA>}
+      - {forceString: true, name: postgres.password, value: <same-generated-password>}
   destination:
     server: https://kubernetes.default.svc
     namespace: berth

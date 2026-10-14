@@ -1,7 +1,7 @@
 frontend:
-  image: ghcr.io/YOUR_GHCR_USERNAME/berth-frontend
+  image: ghcr.io/YOUR_GHCR_USERNAME/berth/berth-frontend
 backend:
-  image: ghcr.io/YOUR_GHCR_USERNAME/berth-backend
+  image: ghcr.io/YOUR_GHCR_USERNAME/berth/berth-backend
 replicaCount: 2
 ingress:
   enabled: true

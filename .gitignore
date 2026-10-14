@@ -31,3 +31,7 @@ kubeconfig
 
 # CI job logs (local debugging only)
 berth-job-log.txt
+
+docs/CLOUD_RUNBOOK.md
+docs/DEMO_PLAN.md
+

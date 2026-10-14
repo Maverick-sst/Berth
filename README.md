@@ -157,18 +157,27 @@ cloud runbook. No cloud credentials live in this repository.
 ```bash
 helm upgrade --install berth ./helm/taskboard \
   --namespace berth --create-namespace \
-  --set backend.image=ghcr.io/<OWNER>/berth-backend \
+  --set backend.image=ghcr.io/<OWNER>/<REPO>/berth-backend \
   --set backend.tag=<COMMIT_SHA> \
-  --set frontend.image=ghcr.io/<OWNER>/berth-frontend \
+  --set frontend.image=ghcr.io/<OWNER>/<REPO>/berth-frontend \
   --set frontend.tag=<COMMIT_SHA>
 ```
+
+> Image paths are **nested under the repo name** because the CI lowercases
+> `owner/repo`: for this repository that is
+> `ghcr.io/maverick-sst/berth/berth-backend` and
+> `ghcr.io/maverick-sst/berth/berth-frontend`, tagged with the full commit SHA
+> (immutable; never `latest` for a real deploy).
 
 - Backend: Deployment + Service (`:8000`), readiness `/ready`, liveness `/health`,
   HPA (CPU 60%, 2–6 replicas), ServiceMonitor for the Prometheus Operator.
 - Frontend: Deployment + Service (`:8080`, unprivileged nginx).
 - PostgreSQL in-cluster with a 5Gi PVC (classroom/demo; use RDS for real prod).
 - Ingress (off by default; enable with `values-dev.yaml` / `values-prod.yaml`):
-  `/api` → backend, `/` → frontend.
+  `/api` → backend, `/` → frontend. Enabling it also requires an ingress
+  controller — e.g. `helm upgrade --install ingress-nginx ingress-nginx
+  --repo https://kubernetes.github.io/ingress-nginx -n ingress-nginx
+  --create-namespace` (the resulting cloud load balancer is billable).
 - Both deployments run non-root (`runAsNonRoot`, uid 10001, caps dropped).
 
 Validate without a cluster: `helm lint helm/taskboard && helm template berth ./helm/taskboard`.
@@ -186,7 +195,9 @@ Validate without a cluster: `helm lint helm/taskboard && helm template berth ./h
 ## Infrastructure (Terraform, AWS)
 
 `terraform/` provisions VPC (2 public + 2 private subnets, single NAT) and an
-EKS 1.31 cluster (t3.medium managed nodes, 2–4). Validated with
+EKS 1.31 cluster (t3.medium managed nodes, 2–4), and installs the
+**aws-ebs-csi-driver add-on** with an IRSA role so the chart's PVC binds
+(EKS 1.31 has no in-tree EBS provisioner). Validated with
 `terraform fmt -check -recursive` and `terraform validate`; `terraform.tfvars.example`
 holds placeholders only.
 

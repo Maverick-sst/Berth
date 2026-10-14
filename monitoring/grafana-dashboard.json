@@ -25,7 +25,7 @@
       "datasource": {"type": "prometheus", "uid": "${job}"},
       "targets": [
         {
-          "expr": "sum(rate(http_requests_total{app=\"berth-backend\"}[5m])) by (handler)",
+          "expr": "sum(rate(http_requests_total[5m])) by (handler)",
           "legendFormat": "{{handler}}"
         }
       ]
@@ -38,7 +38,7 @@
       "datasource": {"type": "prometheus", "uid": "${job}"},
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{app=\"berth-backend\"}[5m])) by (le, handler))",
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, handler))",
           "legendFormat": "p95 {{handler}}"
         }
       ]
@@ -51,7 +51,7 @@
       "datasource": {"type": "prometheus", "uid": "${job}"},
       "targets": [
         {
-          "expr": "sum(rate(http_requests_total{app=\"berth-backend\", status=~\"[45]..\"}[5m])) by (status)",
+          "expr": "sum(rate(http_requests_total{status=~\"[45]..\"}[5m])) by (status)",
           "legendFormat": "HTTP {{status}}"
         }
       ]
@@ -64,7 +64,7 @@
       "datasource": {"type": "prometheus", "uid": "${job}"},
       "targets": [
         {
-          "expr": "sum(increase(http_requests_total{app=\"berth-backend\"}[1h])) by (status)",
+          "expr": "sum(increase(http_requests_total[1h])) by (status)",
           "legendFormat": "{{status}}"
         }
       ]
